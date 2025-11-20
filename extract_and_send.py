@@ -261,7 +261,7 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
     Returns:
         List of paths to downloaded PDF files
     """
-    print_info(f"Connecting to IMAP server: {IMAP_SERVER}:{IMAP_PORT}")
+    print_info(f"Connecting to IMAP: {IMAP_SERVER}")
     logger.info(f"Connecting to IMAP server: {IMAP_SERVER}:{IMAP_PORT}")
 
     downloaded_pdfs: List[Path] = []
@@ -271,22 +271,20 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT)
         mail.login(EMAIL_USER, EMAIL_PASSWORD)
         print_success(f"Logged in as {EMAIL_USER}")
-        logger.info(f"Successfully logged in as {EMAIL_USER}")
 
         # Select folder
         mail.select(IMAP_FOLDER)
-        print_info(f"Reading folder: {IMAP_FOLDER}")
         logger.info(f"Selected folder: {IMAP_FOLDER}")
 
         # Search for emails
         if PROCESS_UNREAD_ONLY:
             search_criteria = "UNSEEN"
-            print_info("Searching for unread emails only")
-            logger.info("Searching for unread emails only")
+            print_info("Searching for unread emails with PDF attachments...")
         else:
             search_criteria = "ALL"
-            print_info("Searching for all emails")
-            logger.info("Searching for all emails")
+            print_info("Searching all emails for PDF attachments...")
+
+        logger.info(f"Search criteria: {search_criteria}")
 
         status, message_ids = mail.search(None, search_criteria)
 
@@ -297,18 +295,26 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
 
         message_id_list = message_ids[0].split()
         total_emails = len(message_id_list)
-        print_success(f"Found {total_emails} emails to process")
+        print_success(f"Found {total_emails} emails")
         logger.info(f"Found {total_emails} emails to process")
 
         # Process each email
         email_counter = 0
+        pdfs_found = 0
+
+        print_info(f"Processing {total_emails} emails (showing only PDFs found)...")
+
         for msg_num in message_id_list:
             email_counter += 1
+
+            # Show progress every 50 emails or at the end
+            if email_counter % 50 == 0 or email_counter == total_emails:
+                print_info(f"Progress: {email_counter}/{total_emails} emails checked, {pdfs_found} PDFs found so far...")
+
             try:
                 status, msg_data = mail.fetch(msg_num, "(RFC822)")
 
                 if status != "OK":
-                    print_error(f"[{email_counter}/{total_emails}] Failed to fetch email")
                     logger.warning(f"Failed to fetch email {msg_num}")
                     continue
 
@@ -319,12 +325,8 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
                 # Get message ID and subject for display
                 message_id = email_message.get("Message-ID", str(msg_num.decode()))
                 subject = email_message.get("Subject", "No Subject")
-                if subject and len(subject) > 50:
-                    subject = subject[:50] + "..."
 
                 message_id = sanitize_filename(message_id)
-
-                print_progress(email_counter, total_emails, f"Processing: {subject}")
 
                 # Process attachments
                 attachment_index = 0
@@ -359,14 +361,17 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
 
                         downloaded_pdfs.append(filepath)
                         email_pdf_count += 1
-                        logger.info(f"Downloaded PDF: {filepath.name}")
+                        pdfs_found += 1
+                        logger.debug(f"Downloaded PDF: {filepath.name}")
                         attachment_index += 1
 
+                # Only show message if PDFs were found
                 if email_pdf_count > 0:
-                    print_success(f"    Downloaded {email_pdf_count} PDF(s)")
+                    if len(subject) > 60:
+                        subject = subject[:60] + "..."
+                    print_success(f"Found {email_pdf_count} PDF(s) in: {subject}")
 
             except Exception as e:
-                print_error(f"[{email_counter}/{total_emails}] Error processing email: {e}")
                 logger.error(f"Error processing email {msg_num}: {e}")
                 continue
 
@@ -990,63 +995,51 @@ def main():
 
         # Step 1: Fetch emails and download PDFs
         print_section("STEP 1: Fetching Emails and Downloading PDFs")
-        logger.info("\n[STEP 1] Fetching emails and downloading PDFs...")
         downloaded_pdfs = fetch_emails_and_download_pdfs(dry_run=args.dry_run)
 
         if not downloaded_pdfs:
             print_warning("No PDF attachments found in emails")
-            logger.warning("No PDF attachments found in emails")
             return
 
         # Step 2: Split PDFs into single pages
         print_section("STEP 2: Splitting PDFs into Single Pages")
-        logger.info("\n[STEP 2] Splitting PDFs into single pages...")
         single_pages = split_pdfs_to_single_pages(downloaded_pdfs)
 
         if not single_pages:
             print_warning("No pages extracted from PDFs")
-            logger.warning("No pages extracted from PDFs")
             return
 
         # Step 3: Extract account numbers
         print_section("STEP 3: Extracting Account Numbers")
-        logger.info("\n[STEP 3] Extracting account numbers from pages...")
         single_pages = extract_account_numbers_from_pages(single_pages)
 
         # Step 4: Load account mapping
         print_section("STEP 4: Loading Account Mapping")
-        logger.info("\n[STEP 4] Loading account mapping...")
         mapping = load_account_mapping(MAPPING_FILE)
         print_success(f"Loaded mapping for {len(mapping.guy_to_accounts)} recipients")
 
         # Step 5: Group pages by guy
         print_section("STEP 5: Grouping Pages by Recipient")
-        logger.info("\n[STEP 5] Grouping pages by recipient...")
         guy_pages = group_pages_by_guy(single_pages, mapping)
 
         if not guy_pages:
             print_warning("No pages matched to recipients")
-            logger.warning("No pages matched to recipients")
             return
 
         # Step 6: Merge pages per guy
         print_section("STEP 6: Merging PDFs per Recipient")
-        logger.info("\n[STEP 6] Merging PDFs per recipient...")
         merged_pdfs = merge_pages_per_guy(guy_pages, mapping)
 
         if not merged_pdfs:
             print_warning("No merged PDFs created")
-            logger.warning("No merged PDFs created")
             return
 
         # Step 7: Send emails
         print_section("STEP 7: Sending Emails")
-        logger.info("\n[STEP 7] Sending emails...")
         send_results = send_emails_for_merged_pdfs(merged_pdfs, dry_run=args.dry_run)
 
         # Step 8: Write log
         print_section("STEP 8: Writing Log File")
-        logger.info("\n[STEP 8] Writing run log...")
         log_path = write_run_log(single_pages, mapping, guy_pages, merged_pdfs, send_results)
         print_success(f"Log file created: {log_path}")
 
