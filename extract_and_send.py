@@ -404,8 +404,12 @@ def extract_account_number(pdf_path: Path, regex_pattern: str) -> Optional[str]:
             match = pattern.search(text)
 
             if match:
-                account_number = match.group(1).strip()
-                return account_number
+                # Handle multiple capture groups (for alternation patterns)
+                # Try each group until we find a non-None value
+                for i in range(1, len(match.groups()) + 1):
+                    if match.group(i):
+                        account_number = match.group(i).strip()
+                        return account_number
 
             return None
 
