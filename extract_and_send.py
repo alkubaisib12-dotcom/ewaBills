@@ -508,7 +508,7 @@ def extract_account_number(pdf_path: Path, regex_pattern: str) -> Optional[str]:
             return None
 
     except Exception as e:
-        logger.error(f"Error extracting text from {pdf_path.name}: {e}")
+        logger.debug(f"Error extracting text from {pdf_path.name}: {e}")
         return None
 
 
@@ -553,7 +553,7 @@ def extract_account_numbers_from_pages(
         else:
             page_info.extraction_failed = True
             failed_extractions += 1
-            logger.warning(f"Failed to extract account number from {page_info.single_page_path.name}")
+            logger.debug(f"Failed to extract account number from {page_info.single_page_path.name}")
 
     print_summary_box("ACCOUNT EXTRACTION COMPLETE", {
         "Successful Extractions": successful_extractions,
