@@ -1,0 +1,28 @@
+# Python Requirements for ewaBills Automation System
+# Python 3.11+
+
+# Email and IMAP handling (built-in, no install needed)
+# - imaplib
+# - email
+# - smtplib
+
+# PDF Processing
+pypdf==4.0.1
+pdfplumber==0.11.0
+
+# Data Processing
+pandas==2.1.4
+openpyxl==3.1.2  # For reading Excel files
+
+# Configuration Management
+python-dotenv==1.0.0
+
+# Additional utilities (included in standard library)
+# - pathlib
+# - csv
+# - logging
+# - argparse
+# - datetime
+# - re
+# - time
+# - typing

@@ -1,0 +1,48 @@
+# Environment and Credentials
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Working Directories (contain sensitive data)
+downloads_raw/
+single_pages/
+merged_by_guy/
+logs/
+
+# Keep directory structure but not contents
+!downloads_raw/.gitkeep
+!single_pages/.gitkeep
+!merged_by_guy/.gitkeep
+!logs/.gitkeep
+
+# Actual mapping file (keep example only)
+config/accounts_mapping.csv
+config/accounts_mapping.xlsx
+!config/accounts_mapping_example.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+*.pid
