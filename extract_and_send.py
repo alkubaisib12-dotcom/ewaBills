@@ -197,6 +197,58 @@ def get_current_time() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
+# ==================== CONSOLE OUTPUT HELPERS ====================
+
+def print_header(text: str):
+    """Print a formatted header."""
+    print("\n" + "=" * 80)
+    print(f"  {text}")
+    print("=" * 80)
+
+
+def print_section(text: str):
+    """Print a section header."""
+    print(f"\n{'─' * 80}")
+    print(f"▶ {text}")
+    print('─' * 80)
+
+
+def print_success(text: str):
+    """Print success message with checkmark."""
+    print(f"  ✓ {text}")
+
+
+def print_error(text: str):
+    """Print error message with X."""
+    print(f"  ✗ {text}")
+
+
+def print_warning(text: str):
+    """Print warning message."""
+    print(f"  ⚠ {text}")
+
+
+def print_info(text: str):
+    """Print info message."""
+    print(f"  → {text}")
+
+
+def print_progress(current: int, total: int, text: str):
+    """Print progress indicator."""
+    print(f"  [{current}/{total}] {text}")
+
+
+def print_summary_box(title: str, items: Dict[str, any]):
+    """Print a summary box."""
+    print(f"\n╔{'═' * 78}╗")
+    print(f"║ {title.center(76)} ║")
+    print(f"╠{'═' * 78}╣")
+    for key, value in items.items():
+        line = f"║  {key}: {value}"
+        print(line + " " * (79 - len(line)) + "║")
+    print(f"╚{'═' * 78}╝")
+
+
 # ==================== EMAIL FETCHING ====================
 
 def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
@@ -209,6 +261,7 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
     Returns:
         List of paths to downloaded PDF files
     """
+    print_info(f"Connecting to IMAP server: {IMAP_SERVER}:{IMAP_PORT}")
     logger.info(f"Connecting to IMAP server: {IMAP_SERVER}:{IMAP_PORT}")
 
     downloaded_pdfs: List[Path] = []
@@ -217,35 +270,45 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
         # Connect to IMAP server
         mail = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT)
         mail.login(EMAIL_USER, EMAIL_PASSWORD)
+        print_success(f"Logged in as {EMAIL_USER}")
         logger.info(f"Successfully logged in as {EMAIL_USER}")
 
         # Select folder
         mail.select(IMAP_FOLDER)
+        print_info(f"Reading folder: {IMAP_FOLDER}")
         logger.info(f"Selected folder: {IMAP_FOLDER}")
 
         # Search for emails
         if PROCESS_UNREAD_ONLY:
             search_criteria = "UNSEEN"
+            print_info("Searching for unread emails only")
             logger.info("Searching for unread emails only")
         else:
             search_criteria = "ALL"
+            print_info("Searching for all emails")
             logger.info("Searching for all emails")
 
         status, message_ids = mail.search(None, search_criteria)
 
         if status != "OK":
+            print_error("Failed to search emails")
             logger.error("Failed to search emails")
             return downloaded_pdfs
 
         message_id_list = message_ids[0].split()
-        logger.info(f"Found {len(message_id_list)} emails to process")
+        total_emails = len(message_id_list)
+        print_success(f"Found {total_emails} emails to process")
+        logger.info(f"Found {total_emails} emails to process")
 
         # Process each email
+        email_counter = 0
         for msg_num in message_id_list:
+            email_counter += 1
             try:
                 status, msg_data = mail.fetch(msg_num, "(RFC822)")
 
                 if status != "OK":
+                    print_error(f"[{email_counter}/{total_emails}] Failed to fetch email")
                     logger.warning(f"Failed to fetch email {msg_num}")
                     continue
 
@@ -253,12 +316,19 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
                 email_body = msg_data[0][1]
                 email_message = email.message_from_bytes(email_body)
 
-                # Get message ID for unique filenames
+                # Get message ID and subject for display
                 message_id = email_message.get("Message-ID", str(msg_num.decode()))
+                subject = email_message.get("Subject", "No Subject")
+                if subject and len(subject) > 50:
+                    subject = subject[:50] + "..."
+
                 message_id = sanitize_filename(message_id)
+
+                print_progress(email_counter, total_emails, f"Processing: {subject}")
 
                 # Process attachments
                 attachment_index = 0
+                email_pdf_count = 0
                 for part in email_message.walk():
                     if part.get_content_maintype() == 'multipart':
                         continue
@@ -288,15 +358,24 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
                             f.write(part.get_payload(decode=True))
 
                         downloaded_pdfs.append(filepath)
+                        email_pdf_count += 1
                         logger.info(f"Downloaded PDF: {filepath.name}")
                         attachment_index += 1
 
+                if email_pdf_count > 0:
+                    print_success(f"    Downloaded {email_pdf_count} PDF(s)")
+
             except Exception as e:
+                print_error(f"[{email_counter}/{total_emails}] Error processing email: {e}")
                 logger.error(f"Error processing email {msg_num}: {e}")
                 continue
 
         mail.close()
         mail.logout()
+        print_summary_box("EMAIL DOWNLOAD COMPLETE", {
+            "Total PDFs Downloaded": len(downloaded_pdfs),
+            "From Emails": total_emails
+        })
         logger.info(f"Successfully downloaded {len(downloaded_pdfs)} PDF files")
 
     except Exception as e:
@@ -318,15 +397,20 @@ def split_pdfs_to_single_pages(pdf_files: List[Path]) -> List[SinglePageInfo]:
     Returns:
         List of SinglePageInfo objects
     """
-    logger.info(f"Starting to split {len(pdf_files)} PDF files")
+    total_pdfs = len(pdf_files)
+    print_info(f"Splitting {total_pdfs} PDF files into single pages...")
+    logger.info(f"Starting to split {total_pdfs} PDF files")
 
     single_pages: List[SinglePageInfo] = []
+    pdf_counter = 0
 
     for pdf_path in pdf_files:
+        pdf_counter += 1
         try:
             reader = PdfReader(str(pdf_path))
             num_pages = len(reader.pages)
 
+            print_progress(pdf_counter, total_pdfs, f"Splitting {pdf_path.name} ({num_pages} pages)")
             logger.info(f"Processing {pdf_path.name} with {num_pages} pages")
 
             base_name = pdf_path.stem
@@ -368,9 +452,14 @@ def split_pdfs_to_single_pages(pdf_files: List[Path]) -> List[SinglePageInfo]:
                     continue
 
         except Exception as e:
+            print_error(f"Error reading PDF {pdf_path.name}: {e}")
             logger.error(f"Error reading PDF {pdf_path.name}: {e}")
             continue
 
+    print_summary_box("PDF SPLITTING COMPLETE", {
+        "Total Single Pages Created": len(single_pages),
+        "From PDF Files": total_pdfs
+    })
     logger.info(f"Successfully split into {len(single_pages)} single-page PDFs")
     return single_pages
 
@@ -432,12 +521,20 @@ def extract_account_numbers_from_pages(
     Returns:
         Updated list of SinglePageInfo objects with account numbers
     """
-    logger.info(f"Extracting account numbers from {len(single_pages)} pages")
+    total_pages = len(single_pages)
+    print_info(f"Extracting account numbers from {total_pages} pages...")
+    logger.info(f"Extracting account numbers from {total_pages} pages")
 
     successful_extractions = 0
     failed_extractions = 0
+    page_counter = 0
 
     for page_info in single_pages:
+        page_counter += 1
+
+        if page_counter % 10 == 0 or page_counter == total_pages:
+            print_progress(page_counter, total_pages, f"Extracting account numbers...")
+
         if page_info.extraction_failed:
             failed_extractions += 1
             continue
@@ -453,6 +550,11 @@ def extract_account_numbers_from_pages(
             failed_extractions += 1
             logger.warning(f"Failed to extract account number from {page_info.single_page_path.name}")
 
+    print_summary_box("ACCOUNT EXTRACTION COMPLETE", {
+        "Successful Extractions": successful_extractions,
+        "Failed Extractions": failed_extractions,
+        "Success Rate": f"{(successful_extractions/total_pages*100):.1f}%" if total_pages > 0 else "N/A"
+    })
     logger.info(f"Account extraction: {successful_extractions} successful, {failed_extractions} failed")
     return single_pages
 
@@ -559,11 +661,15 @@ def merge_pages_per_guy(
     Returns:
         Dictionary mapping guy_email to (merged_pdf_path, guy_name, num_pages)
     """
-    logger.info(f"Merging PDFs for {len(guy_pages)} recipients")
+    total_recipients = len(guy_pages)
+    print_info(f"Merging PDFs for {total_recipients} recipients...")
+    logger.info(f"Merging PDFs for {total_recipients} recipients")
 
     merged_pdfs: Dict[str, Tuple[Path, str, int]] = {}
+    recipient_counter = 0
 
     for guy_email, pages in guy_pages.items():
+        recipient_counter += 1
         try:
             # Sort pages for deterministic ordering
             # Sort by account_number, then source_raw_file, then page_number
@@ -602,12 +708,18 @@ def merge_pages_per_guy(
             num_pages = len(sorted_pages)
             merged_pdfs[guy_email] = (merged_path, guy_name, num_pages)
 
+            print_progress(recipient_counter, total_recipients, f"✓ {guy_name}: {num_pages} pages merged")
             logger.info(f"Created merged PDF for {guy_name} ({guy_email}): {num_pages} pages")
 
         except Exception as e:
+            print_error(f"[{recipient_counter}/{total_recipients}] Error merging for {guy_email}: {e}")
             logger.error(f"Error merging PDFs for {guy_email}: {e}")
             continue
 
+    print_summary_box("PDF MERGING COMPLETE", {
+        "Total Recipients": total_recipients,
+        "Merged PDFs Created": len(merged_pdfs)
+    })
     logger.info(f"Successfully created {len(merged_pdfs)} merged PDFs")
     return merged_pdfs
 
@@ -684,13 +796,20 @@ def send_emails_for_merged_pdfs(
     Returns:
         Dictionary mapping guy_email to success status
     """
-    logger.info(f"Sending emails to {len(merged_pdfs)} recipients (dry_run={dry_run})")
+    total_emails = len(merged_pdfs)
+    if dry_run:
+        print_warning(f"DRY RUN MODE - No emails will actually be sent")
+    print_info(f"Sending emails to {total_emails} recipients...")
+    logger.info(f"Sending emails to {total_emails} recipients (dry_run={dry_run})")
 
     send_results: Dict[str, bool] = {}
     emails_sent = 0
+    email_counter = 0
 
     for guy_email, (pdf_path, guy_name, num_pages) in merged_pdfs.items():
+        email_counter += 1
         if dry_run:
+            print_progress(email_counter, total_emails, f"[DRY RUN] Would send to {guy_name} ({guy_email}) - {num_pages} pages")
             logger.info(f"[DRY RUN] Would send email to {guy_email} with attachment {pdf_path.name}")
             send_results[guy_email] = True
             emails_sent += 1
@@ -699,16 +818,26 @@ def send_emails_for_merged_pdfs(
             send_results[guy_email] = success
 
             if success:
+                print_progress(email_counter, total_emails, f"✓ Sent to {guy_name} ({guy_email}) - {num_pages} pages")
                 emails_sent += 1
+            else:
+                print_progress(email_counter, total_emails, f"✗ Failed to send to {guy_name} ({guy_email})")
 
             # Batch delay
             if emails_sent > 0 and emails_sent % batch_size == 0:
+                print_info(f"Batch complete ({emails_sent} emails). Pausing for {batch_delay} seconds...")
                 logger.info(f"Sent {emails_sent} emails, pausing for {batch_delay} seconds...")
                 time.sleep(batch_delay)
 
     successful = sum(1 for success in send_results.values() if success)
     failed = len(send_results) - successful
 
+    print_summary_box("EMAIL SENDING COMPLETE", {
+        "Total Emails": total_emails,
+        "Successful": successful,
+        "Failed": failed,
+        "Mode": "DRY RUN" if dry_run else "PRODUCTION"
+    })
     logger.info(f"Email sending complete: {successful} successful, {failed} failed")
     return send_results
 
@@ -843,6 +972,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Print header
+    print_header("ewaBills - Automated Billing Workflow System")
+    print(f"  Mode: {'DRY RUN' if args.dry_run else 'PRODUCTION'}")
+    print(f"  Server: {IMAP_SERVER}")
+    print(f"  User: {EMAIL_USER}")
+    print("=" * 80)
+
     logger.info("=" * 80)
     logger.info("Starting extract_and_send.py")
     logger.info(f"Dry run mode: {args.dry_run}")
@@ -853,52 +989,71 @@ def main():
         ensure_directories_exist()
 
         # Step 1: Fetch emails and download PDFs
+        print_section("STEP 1: Fetching Emails and Downloading PDFs")
         logger.info("\n[STEP 1] Fetching emails and downloading PDFs...")
         downloaded_pdfs = fetch_emails_and_download_pdfs(dry_run=args.dry_run)
 
         if not downloaded_pdfs:
+            print_warning("No PDF attachments found in emails")
             logger.warning("No PDF attachments found in emails")
             return
 
         # Step 2: Split PDFs into single pages
+        print_section("STEP 2: Splitting PDFs into Single Pages")
         logger.info("\n[STEP 2] Splitting PDFs into single pages...")
         single_pages = split_pdfs_to_single_pages(downloaded_pdfs)
 
         if not single_pages:
+            print_warning("No pages extracted from PDFs")
             logger.warning("No pages extracted from PDFs")
             return
 
         # Step 3: Extract account numbers
+        print_section("STEP 3: Extracting Account Numbers")
         logger.info("\n[STEP 3] Extracting account numbers from pages...")
         single_pages = extract_account_numbers_from_pages(single_pages)
 
         # Step 4: Load account mapping
+        print_section("STEP 4: Loading Account Mapping")
         logger.info("\n[STEP 4] Loading account mapping...")
         mapping = load_account_mapping(MAPPING_FILE)
+        print_success(f"Loaded mapping for {len(mapping.guy_to_accounts)} recipients")
 
         # Step 5: Group pages by guy
+        print_section("STEP 5: Grouping Pages by Recipient")
         logger.info("\n[STEP 5] Grouping pages by recipient...")
         guy_pages = group_pages_by_guy(single_pages, mapping)
 
         if not guy_pages:
+            print_warning("No pages matched to recipients")
             logger.warning("No pages matched to recipients")
             return
 
         # Step 6: Merge pages per guy
+        print_section("STEP 6: Merging PDFs per Recipient")
         logger.info("\n[STEP 6] Merging PDFs per recipient...")
         merged_pdfs = merge_pages_per_guy(guy_pages, mapping)
 
         if not merged_pdfs:
+            print_warning("No merged PDFs created")
             logger.warning("No merged PDFs created")
             return
 
         # Step 7: Send emails
+        print_section("STEP 7: Sending Emails")
         logger.info("\n[STEP 7] Sending emails...")
         send_results = send_emails_for_merged_pdfs(merged_pdfs, dry_run=args.dry_run)
 
         # Step 8: Write log
+        print_section("STEP 8: Writing Log File")
         logger.info("\n[STEP 8] Writing run log...")
         log_path = write_run_log(single_pages, mapping, guy_pages, merged_pdfs, send_results)
+        print_success(f"Log file created: {log_path}")
+
+        print_header("PROCESSING COMPLETE!")
+        print(f"  Log file: {log_path}")
+        print(f"  Mode: {'DRY RUN' if args.dry_run else 'PRODUCTION'}")
+        print("=" * 80)
 
         logger.info("=" * 80)
         logger.info("Processing complete!")
