@@ -394,7 +394,7 @@ def fetch_emails_and_download_pdfs(dry_run: bool = False) -> List[Path]:
 
 def split_pdfs_to_single_pages(pdf_files: List[Path]) -> List[SinglePageInfo]:
     """
-    Split each PDF into single-page PDFs.
+    Split each PDF into single-page PDFs and name them with account numbers.
 
     Args:
         pdf_files: List of PDF file paths to split
@@ -403,11 +403,14 @@ def split_pdfs_to_single_pages(pdf_files: List[Path]) -> List[SinglePageInfo]:
         List of SinglePageInfo objects
     """
     total_pdfs = len(pdf_files)
-    print_info(f"Splitting {total_pdfs} PDF files into single pages...")
+    print_info(f"Splitting {total_pdfs} PDF files and extracting account numbers...")
     logger.info(f"Starting to split {total_pdfs} PDF files")
 
     single_pages: List[SinglePageInfo] = []
     pdf_counter = 0
+
+    # Track page count per account number for unique filenames
+    account_page_count: Dict[str, int] = {}
 
     for pdf_path in pdf_files:
         pdf_counter += 1
@@ -426,29 +429,65 @@ def split_pdfs_to_single_pages(pdf_files: List[Path]) -> List[SinglePageInfo]:
                     writer = PdfWriter()
                     writer.add_page(reader.pages[page_num])
 
-                    # Generate unique filename for single page
-                    single_page_filename = f"{base_name}_page_{page_num + 1}.pdf"
-                    single_page_path = SINGLE_PAGES_DIR / single_page_filename
+                    # Generate temporary filename first
+                    temp_filename = f"temp_page_{page_num + 1}.pdf"
+                    temp_path = SINGLE_PAGES_DIR / temp_filename
 
-                    # Write single page PDF
-                    with open(single_page_path, 'wb') as f:
+                    # Write single page PDF to temp file
+                    with open(temp_path, 'wb') as f:
                         writer.write(f)
 
-                    # Create SinglePageInfo object
-                    page_info = SinglePageInfo(
-                        single_page_path=single_page_path,
-                        source_raw_file=pdf_path.name,
-                        page_number=page_num + 1
-                    )
-                    single_pages.append(page_info)
+                    # Extract account number from this page
+                    account_number = extract_account_number(temp_path, ACCOUNT_REGEX)
 
-                    logger.debug(f"Created single page: {single_page_filename}")
+                    if account_number:
+                        # Increment counter for this account
+                        if account_number not in account_page_count:
+                            account_page_count[account_number] = 0
+                        account_page_count[account_number] += 1
+
+                        # Create filename with account number: 123456-name-1.pdf
+                        final_filename = f"{account_number}-page-{account_page_count[account_number]}.pdf"
+                        final_path = SINGLE_PAGES_DIR / final_filename
+
+                        # Rename temp file to final name
+                        temp_path.rename(final_path)
+
+                        # Create SinglePageInfo object
+                        page_info = SinglePageInfo(
+                            single_page_path=final_path,
+                            source_raw_file=pdf_path.name,
+                            page_number=page_num + 1,
+                            account_number=account_number
+                        )
+                        single_pages.append(page_info)
+                        logger.debug(f"Created: {final_filename} (account: {account_number})")
+                    else:
+                        # No account number found - use "UNKNOWN" prefix
+                        unknown_count = account_page_count.get("UNKNOWN", 0) + 1
+                        account_page_count["UNKNOWN"] = unknown_count
+
+                        final_filename = f"UNKNOWN-page-{unknown_count}.pdf"
+                        final_path = SINGLE_PAGES_DIR / final_filename
+
+                        # Rename temp file
+                        temp_path.rename(final_path)
+
+                        # Create entry for failed extraction
+                        page_info = SinglePageInfo(
+                            single_page_path=final_path,
+                            source_raw_file=pdf_path.name,
+                            page_number=page_num + 1,
+                            extraction_failed=True
+                        )
+                        single_pages.append(page_info)
+                        logger.debug(f"Created: {final_filename} (no account number found)")
 
                 except Exception as e:
                     logger.error(f"Error splitting page {page_num + 1} of {pdf_path.name}: {e}")
                     # Create entry for failed page
                     page_info = SinglePageInfo(
-                        single_page_path=SINGLE_PAGES_DIR / f"{base_name}_page_{page_num + 1}_FAILED.pdf",
+                        single_page_path=SINGLE_PAGES_DIR / f"ERROR-page-{page_num + 1}.pdf",
                         source_raw_file=pdf_path.name,
                         page_number=page_num + 1,
                         extraction_failed=True
@@ -461,11 +500,17 @@ def split_pdfs_to_single_pages(pdf_files: List[Path]) -> List[SinglePageInfo]:
             logger.error(f"Error reading PDF {pdf_path.name}: {e}")
             continue
 
-    print_summary_box("PDF SPLITTING COMPLETE", {
-        "Total Single Pages Created": len(single_pages),
-        "From PDF Files": total_pdfs
+    # Count successful extractions
+    successful = sum(1 for p in single_pages if p.account_number is not None)
+    failed = len(single_pages) - successful
+
+    print_summary_box("PDF SPLITTING & EXTRACTION COMPLETE", {
+        "Total Pages Created": len(single_pages),
+        "Account Numbers Extracted": successful,
+        "Failed Extractions": failed,
+        "Unique Accounts Found": len(account_page_count) - (1 if "UNKNOWN" in account_page_count else 0)
     })
-    logger.info(f"Successfully split into {len(single_pages)} single-page PDFs")
+    logger.info(f"Successfully split into {len(single_pages)} single-page PDFs with {successful} account numbers extracted")
     return single_pages
 
 
@@ -1001,45 +1046,41 @@ def main():
             print_warning("No PDF attachments found in emails")
             return
 
-        # Step 2: Split PDFs into single pages
-        print_section("STEP 2: Splitting PDFs into Single Pages")
+        # Step 2: Split PDFs into single pages and extract account numbers
+        print_section("STEP 2: Splitting PDFs and Extracting Account Numbers")
         single_pages = split_pdfs_to_single_pages(downloaded_pdfs)
 
         if not single_pages:
             print_warning("No pages extracted from PDFs")
             return
 
-        # Step 3: Extract account numbers
-        print_section("STEP 3: Extracting Account Numbers")
-        single_pages = extract_account_numbers_from_pages(single_pages)
-
-        # Step 4: Load account mapping
-        print_section("STEP 4: Loading Account Mapping")
+        # Step 3: Load account mapping
+        print_section("STEP 3: Loading Account Mapping")
         mapping = load_account_mapping(MAPPING_FILE)
         print_success(f"Loaded mapping for {len(mapping.guy_to_accounts)} recipients")
 
-        # Step 5: Group pages by guy
-        print_section("STEP 5: Grouping Pages by Recipient")
+        # Step 4: Group pages by guy
+        print_section("STEP 4: Grouping Pages by Recipient")
         guy_pages = group_pages_by_guy(single_pages, mapping)
 
         if not guy_pages:
             print_warning("No pages matched to recipients")
             return
 
-        # Step 6: Merge pages per guy
-        print_section("STEP 6: Merging PDFs per Recipient")
+        # Step 5: Merge pages per guy
+        print_section("STEP 5: Merging PDFs per Recipient")
         merged_pdfs = merge_pages_per_guy(guy_pages, mapping)
 
         if not merged_pdfs:
             print_warning("No merged PDFs created")
             return
 
-        # Step 7: Send emails
-        print_section("STEP 7: Sending Emails")
+        # Step 6: Send emails
+        print_section("STEP 6: Sending Emails")
         send_results = send_emails_for_merged_pdfs(merged_pdfs, dry_run=args.dry_run)
 
-        # Step 8: Write log
-        print_section("STEP 8: Writing Log File")
+        # Step 7: Write log
+        print_section("STEP 7: Writing Log File")
         log_path = write_run_log(single_pages, mapping, guy_pages, merged_pdfs, send_results)
         print_success(f"Log file created: {log_path}")
 
